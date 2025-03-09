@@ -1,14 +1,12 @@
 const { Client, GatewayIntentBits } = require("discord.js");
-const Discord = require("discord.js-selfbot-v13"); // Be very careful with self-bots!
+const Discord = require("discord.js-selfbot-v13");
 const fs = require("fs");
 const path = require("path");
-const config = require("./config.json");
+const config = require("/workspaces/anikins-selfbot/selfbot/config.json");
 
-// Load tokens from config
 const token1 = config.token1;
 const token2 = config.token2;
 
-// Create the first client
 const client1 = new Discord.Client({
   intents: [
     GatewayIntentBits.DirectMessages,
@@ -18,7 +16,6 @@ const client1 = new Discord.Client({
   ],
 });
 
-// Create the second client
 const client2 = new Discord.Client({
   intents: [
     GatewayIntentBits.DirectMessages,
@@ -31,36 +28,99 @@ const client2 = new Discord.Client({
 client1.commands = new Map();
 client2.commands = new Map();
 
-const activeAutoReacts1 = new Map(); // Context ID -> (User ID -> Set of Emojis)
-const activeAutoReacts2 = new Map(); // Context ID -> (User ID -> Set of Emojis)
+const activeAutoReacts1 = new Map();
+const activeAutoReacts2 = new Map();
 module.exports = { activeAutoReacts1, activeAutoReacts2 };
 
-// In-memory storage for target users. Keyed by channel ID
 const targetUsers1 = {};
 const targetUsers2 = {};
+
+const blockedContent = [
+  "underage",
+  "minor",
+  // ... your existing list ...
+];
+
+async function mimicTask(
+  client,
+  targetUsers,
+  user,
+  message,
+  cacheMessages,
+  blockedContent,
+  clientInstance
+) {
+  while (
+    targetUsers[message.channel.id] &&
+    targetUsers[message.channel.id].targetUserId === user.id
+  ) {
+    try {
+      const channel = clientInstance.channels.cache.get(message.channel.id);
+      const messages = await channel.messages.fetch({
+        limit: 1,
+      });
+
+      if (messages.size === 0) {
+        await new Promise((resolve) => setTimeout(resolve, 10000));
+        continue;
+      }
+
+      const messageToMimic = messages.first();
+
+      if (messageToMimic.author.id === user.id) {
+        const content = messageToMimic.content.toLowerCase();
+
+        if (blockedContent.includes(content)) {
+          continue;
+        }
+
+        let contentToSend = messageToMimic.content;
+
+        while (contentToSend.startsWith(".")) {
+          contentToSend = contentToSend.substring(1).trim();
+        }
+
+        if (!contentToSend) {
+          continue;
+        }
+
+        if (
+          contentToSend.split(".").length > 2 ||
+          ["!", "?", "-", "$", "/", ">", "<"].some((ch) =>
+            contentToSend.startsWith(ch)
+          )
+        ) {
+          continue;
+        }
+
+        if (cacheMessages[messageToMimic.id]) {
+          continue;
+        }
+
+        cacheMessages[messageToMimic.id] = true;
+
+        message.channel.send(contentToSend);
+        await new Promise((resolve) => setTimeout(resolve, 500));
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 10000));
+    } catch (error) {
+      console.error("Mimic Error:", error);
+    }
+  }
+}
 
 async function handleMessage(client, message, activeAutoReacts, targetUsers) {
   try {
     if (message.author.bot) return;
 
     const channelId = message.channel.id;
-    const targetUser = targetUsers[channelId]; // Get the target user for the current channel
+    const targetUser = targetUsers[channelId];
 
-    if (targetUser && message.author.id === targetUser.targetUserId) {
-      // If the message author is the target user
-      const replies = `# ANIKIN OWNS YOU`; // Format the reply message
-      try {
-        await message.reply(replies); // Use reply API for threads context
-        console.log(
-          `Replied to <@${targetUser.targetUserId}> in channel ${channelId}`
-        );
-      } catch (error) {
-        console.error("Failed to send reply:", error);
-      }
-    } else if (!targetUser) {
+    if (!targetUser) {
+      // If not mimicking, don't do anything else
     }
 
-    // Continue processing commands, reactions, etc.
     if (!message.content.startsWith(config.prefix)) return;
 
     const args = message.content
@@ -73,7 +133,15 @@ async function handleMessage(client, message, activeAutoReacts, targetUsers) {
     if (!command) return;
 
     try {
-      command.execute(message, args, activeAutoReacts, client, targetUsers); // Pass client and targetUsers
+      command.execute(
+        message,
+        args,
+        activeAutoReacts,
+        client,
+        targetUsers,
+        {},
+        blockedContent
+      ); // Pass the client instance
     } catch (commandError) {
       console.error("Error executing command:", commandError);
       message.reply("There was an error trying to execute that command!");
@@ -83,7 +151,6 @@ async function handleMessage(client, message, activeAutoReacts, targetUsers) {
   }
 }
 
-// Message Create Listeners for both clients
 client1.on("messageCreate", async (message) => {
   await handleMessage(client1, message, activeAutoReacts1, targetUsers1);
 });
@@ -92,7 +159,6 @@ client2.on("messageCreate", async (message) => {
   await handleMessage(client2, message, activeAutoReacts2, targetUsers2);
 });
 
-// Load commands - This is done only once and the same commands are used for both clients
 const commandFiles = fs
   .readdirSync(path.join(__dirname, "commands"))
   .filter((file) => file.endsWith(".js"));
@@ -102,26 +168,26 @@ for (const file of commandFiles) {
   client2.commands.set(command.name, command);
 }
 
-// Ready event for client1
 client1.once("ready", () => {
-  const magenta = "\x1b[35m"; // ANSI escape code for magenta
-  const reset = "\x1b[0m"; // ANSI escape code to reset color
+  const magenta = "\x1b[35m";
+  const reset = "\x1b[0m";
 
-  console.log(`${magenta}Client 1 Logged in as ${client1.user.tag}!${reset}`);
+  console.log(
+    `${magenta} welcome ${client1.user.tag}! to anikins selfbot ${reset}`
+  );
 
-  // Log commands in a box, excluding "N/A" and ensuring all commands are shown
   const commandNames = Array.from(client1.commands.keys()).filter(
     (name) => typeof name === "string"
-  ); // Filter out non-string command names
+  );
   const boxWidth =
     commandNames.length > 0
       ? Math.max(
           40,
           commandNames.reduce((max, name) => Math.max(max, name.length), 0) + 6
         )
-      : 40; // Minimum width or largest command length + padding
-  const horizontalLine = "-".repeat(boxWidth); // Horizontal line for the box
-  const paddedBoxWidth = boxWidth - 2; // Width inside the box
+      : 40;
+  const horizontalLine = "-".repeat(boxWidth);
+  const paddedBoxWidth = boxWidth - 2;
 
   console.log(`${magenta}+${horizontalLine}+${reset}`);
   console.log(
@@ -145,19 +211,29 @@ client1.once("ready", () => {
   console.log(`${magenta}+${horizontalLine}+${reset}`);
 });
 
-// Ready event for client2
 client2.once("ready", () => {
-  const magenta = "\x1b[35m"; // ANSI escape code for magenta
-  const reset = "\x1b[0m"; // ANSI escape code to reset color
+  const magenta = "\x1b[35m";
+  const reset = "\x1b[0m";
 
-  console.log(`${magenta}Client 2 Logged in as ${client2.user.tag}!${reset}`);
-
-  // No need to print commands twice, it's the same set for both clients
+  console.log(
+    `${magenta} welcome ${client2.user.tag}! to anikins selfbot ${reset}`
+  );
 });
 
-// Log in both clients
+// Added global error handlers
+process.on("unhandledRejection", (reason, promise) => {
+  console.error("Unhandled Rejection at:", promise, "reason:", reason);
+});
+
+process.on("uncaughtException", (error) => {
+  console.error("Uncaught Exception thrown:", error);
+});
+
+console.log("Environment Variables:", process.env);
 client1.login(token1);
+client2.login(token2);
 
 module.exports = {
   client1,
+  client2,
 };
